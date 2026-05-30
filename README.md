@@ -1,7 +1,7 @@
 # 🚀 Remnanode VLESS Reality + Hysteria2 Helper
 
 Подготовка ноды Remnawave для работы с **VLESS Reality + Hysteria2**.
-
+**ВАЖНО!!!!** нода должна быть и **ПРОПИСАНА** в панель и **УСТАНОВЛЕНА** через скрипт от  eGame!!!   https://github.com/eGamesAPI/remnawave-reverse-proxy/blob/main/README-RU.md
 ---
 
 # ⚡ Быстрая установка
