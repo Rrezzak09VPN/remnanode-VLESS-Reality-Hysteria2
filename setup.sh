@@ -1,258 +1,104 @@
 #!/bin/bash
 #
-# setup.sh — Remnawave Node Multi-Protocol Setup v3.2
-# by Rezzosoft KVN | https://rezzosoft.ru/converter.html
+# setup.sh — Автоматическая подготовка ноды Remnanode (eGamesAPI) для VLESS+Hysteria
 #
-set -uo pipefail
+set -euo pipefail
 
-show_logo() {
-    cat << 'EOF'
-╔══════════════════════════════════════════════════════════════════╗
-║                                                                  ║
-║     ██████╗ ███████╗███╗   ███╗███╗   ██╗ █████╗ ██╗    ██╗      ║
-║     ██╔══██╗██╔════╝████╗ ████║████╗  ██║██╔══██╗██║    ██║      ║
-║     ██████╔╝█████╗  ██╔████╔██║██╔██╗ ██║███████║██║ █╗ ██║      ║
-║     ██╔══██╗██╔══╝  ██║╚██╔╝██║██║╚██╗██║██╔══██║██║███╗██║      ║
-║     ██║  ██║███████╗██║ ╚═╝ ██║██║ ╚████║██║  ██║╚███╔███╔╝      ║
-║     ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚══╝╚══╝       ║
-║                                                                  ║
-║           Remnawave Node Multi-Protocol Setup v3.2               ║
-║                      by Rezzosoft KVN                            ║
-║                                                                  ║
-║   Конвертер конфигов: https://rezzosoft.ru/converter.html        ║
-║                                                                  ║
-╚══════════════════════════════════════════════════════════════════╝
-EOF
-}
-
+# Цвета
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m'
 
-log_ok() { echo -e "${GREEN}[✓]${NC} $1"; }
-log_info() { echo -e "${BLUE}[•]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-log_error() { echo -e "${RED}[✗]${NC} $1"; }
-
-fatal() {
-    log_error "$1"
-    [[ -n "${2:-}" ]] && log_warn "$2"
+ok_msg() { echo -e "${GREEN}[OK]${NC} $1"; }
+warn_msg() { echo -e "${YELLOW}[INFO]${NC} $1"; }
+error_exit() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    if [[ -n "${2:-}" ]]; then echo -e "${YELLOW}[RECOMMENDATION]${NC} $2"; fi
     exit 1
 }
 
-preflight_checks() {
-    log_info "Запуск проверок окружения..."
-    echo ""
+echo "=== Подготовка сервера для VLESS + Hysteria ==="
 
-    [[ "$EUID" -ne 0 ]] && fatal "Скрипт требует прав root" "Запустите: sudo bash $0"
-    log_ok "Права root подтверждены"
+# 1. Проверка root
+[[ "$EUID" -ne 0 ]] && error_exit "Требуется root." "Запустите: sudo bash $0"
+ok_msg "Права root: OK"
 
-    command -v docker &>/dev/null || fatal "Docker CLI не найден" "Установите Docker"
-    log_ok "Docker CLI найден"
+# 2. Проверка Docker
+command -v docker &>/dev/null || error_exit "Docker не установлен."
+docker info &>/dev/null || error_exit "Docker демон не запущен."
+ok_msg "Docker: OK"
 
-    docker info &>/dev/null || fatal "Docker daemon не запущен" "Выполните: systemctl start docker"
-    log_ok "Docker daemon работает"
+# 3. Проверка контейнера remnanode
+docker inspect remnanode &>/dev/null || error_exit "Контейнер 'remnanode' не найден."
+[[ "$(docker inspect remnanode --format '{{.State.Status}}')" != "running" ]] && error_exit "remnanode не запущен."
+ok_msg "Контейнер remnanode: running"
 
-    docker inspect remnanode &>/dev/null || fatal "Контейнер 'remnanode' не найден" "Установите панель Remnawave"
+# 4. Проверка монтирования /dev/shm
+docker inspect remnanode --format '{{json .Mounts}}' | grep -q '/dev/shm' || error_exit "/dev/shm не примонтирован в контейнер."
+ok_msg "Монтирование /dev/shm: OK"
 
-    local container_status
-    container_status=$(docker inspect remnanode --format '{{.State.Status}}' 2>/dev/null || echo "unknown")
-    [[ "$container_status" != "running" ]] && fatal "Контейнер 'remnanode' не запущен (статус: $container_status)"
-    log_ok "Контейнер remnanode запущен"
+# 5. Поиск домена и сертификатов
+[[ ! -d /etc/letsencrypt/live ]] && error_exit "Let's Encrypt не найден."
+DOMAIN=$(ls /etc/letsencrypt/live/ | grep -v README | head -n1)
+[[ -z "$DOMAIN" ]] && error_exit "Домен не найден."
+CERT_SRC="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+KEY_SRC="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+[[ ! -f "$CERT_SRC" || ! -f "$KEY_SRC" ]] && error_exit "Файлы сертификатов присутствуют не полностью."
+ok_msg "Домен: $DOMAIN | Сертификаты: OK"
 
-    # КРИТИЧЕСКАЯ ПРОВЕРКА: Xray реально слушает 443/tcp ВНУТРИ контейнера
-    if ! docker exec remnanode ss -ltnp 2>/dev/null | grep -q ':443 '; then
-        fatal "Xray не слушает порт 443/tcp внутри контейнера" "Проверьте логи: docker logs remnanode"
-    fi
-    log_ok "Xray слушает порт 443/tcp (проверено внутри контейнера)"
-
-    docker inspect remnanode --format '{{json .Mounts}}' 2>/dev/null | grep -q '/dev/shm' || \
-        fatal "/dev/shm не примонтирован" "Добавьте в docker-compose.yml: - /dev/shm:/dev/shm"
-    log_ok "/dev/shm доступен"
-
-    local cert_dir="/etc/letsencrypt/live"
-    [[ ! -d "$cert_dir" ]] && fatal "Директория Let's Encrypt не найдена"
-
-    DOMAIN=$(ls "$cert_dir" 2>/dev/null | grep -v README | head -n1)
-    [[ -z "$DOMAIN" ]] && fatal "Домен не найден в $cert_dir"
-
-    CERT_PATH="$cert_dir/$DOMAIN/fullchain.pem"
-    KEY_PATH="$cert_dir/$DOMAIN/privkey.pem"
-
-    [[ ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ]] && fatal "Файлы сертификата отсутствуют"
-    log_ok "Сертификаты найдены для: $DOMAIN"
-
-    if command -v ufw &>/dev/null; then
-        local ufw_status
-        ufw_status=$(ufw status 2>/dev/null | head -n1 | awk '{print $2}')
-        if [[ "$ufw_status" == "active" ]]; then
-            log_ok "UFW активен"
-            UFW_ACTIVE=true
-        else
-            log_warn "UFW не активен. Откройте порты вручную"
-            UFW_ACTIVE=false
-        fi
+# 6. UFW и порты
+if command -v ufw &>/dev/null; then
+    UFW_STATUS=$(ufw status 2>/dev/null | head -n1 | awk '{print $2}')
+    if [[ "$UFW_STATUS" == "active" ]]; then
+        ufw allow 443/tcp >/dev/null 2>&1 || true
+        ufw allow 443/udp >/dev/null 2>&1 || true
+        ok_msg "UFW: порты 443/tcp и 443/udp открыты"
     else
-        log_warn "UFW не установлен"
-        UFW_ACTIVE=false
+        warn_msg "UFW не активен. Убедитесь, что порты 443 открыты другим фаерволом."
     fi
-    echo ""
-}
+else
+    warn_msg "UFW не установлен. Убедитесь, что порты 443 открыты."
+fi
 
-is_port_open_in_ufw() {
-    local port="$1"
-    local proto="${2:-tcp}"
-    ufw status 2>/dev/null | grep -qE "^${port}/${proto}\s+ALLOW"
-}
+# 7. Копирование сертификатов (Идемпотентно через MD5)
+SHM_CERT="/dev/shm/hysteria_cert.pem"
+SHM_KEY="/dev/shm/hysteria_key.pem"
+NEED_COPY=false
 
-open_port() {
-    local port="$1"
-    local proto="${2:-tcp}"
-    local desc="$3"
+if [[ ! -f "$SHM_CERT" || ! -f "$SHM_KEY" ]]; then
+    NEED_COPY=true
+else
+    SRC_CERT_SUM=$(md5sum "$CERT_SRC" | awk '{print $1}')
+    SHM_CERT_SUM=$(md5sum "$SHM_CERT" | awk '{print $1}')
+    [[ "$SRC_CERT_SUM" != "$SHM_CERT_SUM" ]] && NEED_COPY=true
+fi
 
-    [[ "$UFW_ACTIVE" != "true" ]] && return 0
+if [[ "$NEED_COPY" == true ]]; then
+    cp -f "$CERT_SRC" "$SHM_CERT"
+    cp -f "$KEY_SRC" "$SHM_KEY"
+    chmod 644 /dev/shm/hysteria_*.pem
+    ok_msg "Сертификаты скопированы в /dev/shm"
+else
+    ok_msg "Сертификаты в /dev/shm уже актуальны"
+fi
 
-    if is_port_open_in_ufw "$port" "$proto"; then
-        log_ok "Порт $port/$proto уже открыт ($desc)"
-        return 0
-    fi
+# 8. Cron-задачи (Идемпотентно)
+CRON_REBOOT="@reboot cp $CERT_SRC $SHM_CERT && cp $KEY_SRC $SHM_KEY && chmod 644 /dev/shm/*.pem && sleep 15 && docker restart remnanode"
+CRON_DAILY="0 4 * * * cp $CERT_SRC $SHM_CERT && cp $KEY_SRC $SHM_KEY && chmod 644 /dev/shm/*.pem && docker restart remnanode"
 
-    if ufw allow "$port/$proto" &>/dev/null; then
-        log_ok "Порт $port/$proto открыт ($desc)"
-        return 0
-    else
-        log_error "Не удалось открыть $port/$proto"
-        return 1
-    fi
-}
+if crontab -l 2>/dev/null | grep -q "hysteria_cert.pem"; then
+    ok_msg "Cron-задачи уже настроены (идемпотентность)"
+else
+    (crontab -l 2>/dev/null; echo ""; echo "$CRON_REBOOT"; echo "$CRON_DAILY") | crontab -
+    ok_msg "Cron-задачи добавлены"
+fi
 
-sync_certs_to_shm() {
-    local shm_cert="/dev/shm/hysteria_cert.pem"
-    local shm_key="/dev/shm/hysteria_key.pem"
+# 9. Перезапуск
+ok_msg "Перезапуск remnanode..."
+docker restart remnanode >/dev/null
+sleep 3
 
-    if [[ ! -f "$shm_cert" ]] || [[ ! -f "$shm_key" ]] || \
-       ! cmp -s "$CERT_PATH" "$shm_cert" || ! cmp -s "$KEY_PATH" "$shm_key"; then
-        cp -f "$CERT_PATH" "$shm_cert"
-        cp -f "$KEY_PATH" "$shm_key"
-        chmod 644 /dev/shm/hysteria_*.pem
-        log_ok "Сертификаты синхронизированы в /dev/shm"
-        return 0
-    else
-        log_ok "Сертификаты в /dev/shm актуальны"
-        return 1
-    fi
-}
-
-setup_cert_cron() {
-    local cron_reboot="@reboot cp $CERT_PATH /dev/shm/hysteria_cert.pem && cp $KEY_PATH /dev/shm/hysteria_key.pem && chmod 644 /dev/shm/*.pem && sleep 15 && docker restart remnanode"
-    local cron_daily="0 4 * * * cp $CERT_PATH /dev/shm/hysteria_cert.pem && cp $KEY_PATH /dev/shm/hysteria_key.pem && chmod 644 /dev/shm/*.pem && docker restart remnanode"
-
-    if crontab -l 2>/dev/null | grep -q "hysteria_cert.pem"; then
-        log_ok "Cron уже настроен"
-    else
-        (crontab -l 2>/dev/null; echo "$cron_reboot"; echo "$cron_daily") | crontab -
-        log_ok "Cron для сертификатов добавлен"
-    fi
-}
-
-show_menu() {
-    echo ""
-    log_info "Выберите дополнительные протоколы:"
-    echo ""
-    echo -e "${BLUE}  [1]${NC} Hysteria2 (QUIC) — 443/udp"
-    echo -e "${BLUE}  [2]${NC} VLESS gRPC + Reality — 8443/tcp"
-    echo -e "${BLUE}  [3]${NC} VLESS XHTTP + Reality — 4443/tcp"
-    echo -e "${BLUE}  [4]${NC} Все три (1+2+3)"
-    echo ""
-    echo -n "Ваш выбор (1-4): "
-    read -r user_input
-
-    SELECTED=()
-    
-    [[ ! "$user_input" =~ ^[1-4]([[:space:]]+[1-4])*$ ]] && \
-        fatal "Неверный формат" "Используйте цифры 1-4. Пример: 1 2"
-
-    for num in $user_input; do
-        case "$num" in
-            1) [[ ! " ${SELECTED[*]} " =~ " hy2 " ]] && SELECTED+=("hy2") ;;
-            2) [[ ! " ${SELECTED[*]} " =~ " grpc " ]] && SELECTED+=("grpc") ;;
-            3) [[ ! " ${SELECTED[*]} " =~ " xhttp " ]] && SELECTED+=("xhttp") ;;
-            4) SELECTED=("hy2" "grpc" "xhttp"); break ;;
-        esac
-    done
-
-    log_ok "Выбрано: ${SELECTED[*]}"
-    echo ""
-}
-
-apply_config() {
-    log_info "Применение конфигурации..."
-    echo ""
-
-    local certs_changed=false
-
-    for proto in "${SELECTED[@]}"; do
-        case "$proto" in
-            hy2)
-                open_port 443 "udp" "Hysteria2"
-                sync_certs_to_shm && certs_changed=true
-                setup_cert_cron
-                ;;
-            grpc)
-                open_port 8443 "tcp" "VLESS gRPC"
-                ;;
-            xhttp)
-                open_port 4443 "tcp" "VLESS XHTTP"
-                ;;
-        esac
-    done
-
-    if [[ "$certs_changed" == "true" ]]; then
-        log_info "Перезапуск контейнера (изменены сертификаты)..."
-        docker restart remnanode &>/dev/null && sleep 3 && log_ok "Контейнер перезапущен"
-    else
-        log_ok "Перезапуск не требуется"
-    fi
-    echo ""
-}
-
-finalize() {
-    echo "═══════════════════════════════════════════════════════════"
-    echo -e "${GREEN}✓ Настройка завершена!${NC}"
-    echo "═══════════════════════════════════════════════════════════"
-    echo ""
-    echo -e "${BLUE}📋 Сводка:${NC}"
-    echo "   • Домен: $DOMAIN"
-    echo "   • Базовый: 443/tcp — VLESS TCP Reality"
-    
-    for proto in "${SELECTED[@]}"; do
-        case "$proto" in
-            hy2)   echo "   • 443/udp — Hysteria2" ;;
-            grpc)  echo "   • 8443/tcp — VLESS gRPC" ;;
-            xhttp) echo "   • 4443/tcp — VLESS XHTTP" ;;
-        esac
-    done
-
-    echo ""
-    echo -e "${BLUE}🔧 Следующие шаги:${NC}"
-    echo "   1. Откройте панель Remnawave"
-    echo "   2. Используйте конвертер:"
-    echo -e "      ${BLUE}https://rezzosoft.ru/converter.html${NC}"
-    echo "   3. Вставьте конфиг в профиль ноды"
-    echo ""
-    echo "═══════════════════════════════════════════════════════════"
-}
-
-main() {
-    clear
-    show_logo
-    echo ""
-    preflight_checks
-    show_menu
-    apply_config
-    finalize
-}
-
-main "$@"
+echo ""
+echo "✅ Серверная часть полностью готова!"
+echo "Теперь примените новый конфиг через панель Remnawave."
