@@ -261,7 +261,7 @@ finalize() {
     echo -e "${BLUE}🔧 Следующие шаги:${NC}"
     echo "   1. Откройте панель Remnawave"
     echo "   2. Используйте конвертер:"
-    echo -e "      ${BLUE}https://rezzosoft.ru/converter.html${NC}"
+    echo -e "      ${BLUE}https://rezzosoft.com/converter.html${NC}"
     echo "   3. Вставьте конфиг в профиль ноды"
     echo ""
     echo "═══════════════════════════════════════════════════════════"
