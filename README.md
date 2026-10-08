@@ -100,7 +100,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/Rrezzak09VPN/remnanode-VLESS-
 
 ### 3. Открыть конвертер конфигов
 
-https://rezzosoft.ru/converter.html
+https://rezzosoft.com/converter.html
 
 ### 4. Скопировать конфиг ноды из Remnawave
 
@@ -152,7 +152,7 @@ https://rezzosoft.ru/converter.html
 
 # 🌐 Конвертер конфигов
 
-https://rezzosoft.ru/converter.html
+https://rezzosoft.com/converter.html
 
 Позволяет автоматически преобразовать стандартный конфиг Remnawave в мульти-протокольную конфигурацию.
 
