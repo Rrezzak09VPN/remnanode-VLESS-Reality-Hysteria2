@@ -15,9 +15,9 @@
 
 ✅ Добавлена в панель Remnawave
 
-✅ Установлена через reverse-proxy от eGame
+✅ Установлена через reverse-proxy от eGames (Nginx **или** Caddy)
 
-Документация:
+Документация eGames:
 
 https://github.com/eGamesAPI/remnawave-reverse-proxy/blob/main/README-RU.md
 
@@ -36,13 +36,21 @@ bash <(curl -sSL https://raw.githubusercontent.com/Rrezzak09VPN/remnanode-VLESS-
 ### Проверка окружения
 
 * Проверяет запуск от root
-* Проверяет наличие Docker
+* Проверяет обязательные утилиты: `docker`, `ss`, `cmp`, `stat`, `crontab`, `grep`, `openssl`
 * Проверяет доступность Docker daemon
-* Проверяет наличие контейнера `remnanode`
-* Проверяет что контейнер запущен
-* Проверяет доступность `/dev/shm`
-* Проверяет наличие сертификатов Let's Encrypt
+* Проверяет наличие и статус контейнера `remnanode`
+* **Определяет веб-сервер (Nginx или Caddy) по контейнерам и docker-compose.yml**
+  * node-only: `caddy-remnawave` / `remnawave-nginx`
+  * panel+node: `remnawave-caddy` / `remnawave-nginx`
+* **Находит сертификат автоматически и безопасно:**
+  * Caddy: том берётся из `docker volume inspect caddy_data` (без хардкода пути), домен — из `SELF_STEAL_DOMAIN` контейнера, перечисляются **все** CA-каталоги (Let's Encrypt, ZeroSSL и др.)
+  * Nginx: `/etc/letsencrypt/live/<domain>/` — домен сверяется с `server_name` SelfSteal-блока в `nginx.conf` и с mounts контейнера
+  * при нескольких кандидатах — **явная ошибка со списком**, а не выбор наугад
+* Проверяет, что сертификат покрывает домен и не истекает в ближайшие 7 дней
+* Определяет UID процесса `rw-core` через `/proc` (работает и без `id` в контейнере)
 * Проверяет работу VLESS Reality на порту `443/tcp`
+* Проверяет доступность `/dev/shm`
+* Проверяет, что `443/udp` свободен (или уже занят вашей же Hysteria2)
 
 ### Настройка протоколов
 
@@ -50,11 +58,12 @@ bash <(curl -sSL https://raw.githubusercontent.com/Rrezzak09VPN/remnanode-VLESS-
 
 #### Hysteria2
 
-* Открывает `443/udp`
-* Копирует сертификаты в `/dev/shm`
-* Настраивает автоматическую синхронизацию сертификатов
-* Создаёт Cron-задачи для обновления сертификатов
-* При необходимости перезапускает контейнер
+* Открывает `443/udp` (UFW)
+* Копирует сертификаты в `/dev/shm` (`hysteria_cert.pem` + `hysteria_key.pem` — совпадает с конвертером)
+* Выставляет безопасные права ключа (`600` для root-контейнера)
+* Создаёт cron-задачи с маркером версии `rrp-hysteria-v1` (автозамена старых заданий)
+* Перед первой правкой crontab сохраняет бэкап
+* Перезапускает контейнер **только** если сертификаты реально изменились
 
 #### VLESS gRPC + Reality
 
@@ -64,22 +73,14 @@ bash <(curl -sSL https://raw.githubusercontent.com/Rrezzak09VPN/remnanode-VLESS-
 
 * Открывает `4443/tcp`
 
-### Работа с сертификатами
-
-Скрипт автоматически:
-
-* Копирует сертификаты Let's Encrypt в `/dev/shm`
-* Проверяет актуальность сертификатов
-* Создаёт задачу обновления после перезагрузки сервера
-* Создаёт ежедневную задачу обновления сертификатов
-* Перезапускает контейнер после обновления сертификатов
-
 ### Firewall
 
 Если установлен и активен UFW:
 
 * Открывает необходимые порты автоматически
 * Не создаёт дубликаты правил
+
+> ⚠️ Порт `443/udp` также нужно открыть в файрволе облака (security group / iptables провайдера).
 
 ---
 
@@ -100,7 +101,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/Rrezzak09VPN/remnanode-VLESS-
 
 ### 3. Открыть конвертер конфигов
 
-https://rezzosoft.com/converter.html
+https://remna.xyz/pages/convert/
 
 ### 4. Скопировать конфиг ноды из Remnawave
 
@@ -143,16 +144,17 @@ https://rezzosoft.com/converter.html
 
 Он:
 
-* Не создаёт дубликаты Cron-задач
+* Не создаёт дубликаты Cron-задач (маркер `rrp-hysteria-v1`, автозамена старых)
 * Не открывает уже открытые порты
 * Не копирует сертификаты без необходимости
 * Не выполняет лишние перезапуски контейнера
+* Сохраняет бэкап crontab перед первой правкой (`/root/.crontab.rrp-hysteria.backup`)
 
 ---
 
 # 🌐 Конвертер конфигов
 
-https://rezzosoft.com/converter.html
+https://remna.xyz/pages/convert/
 
 Позволяет автоматически преобразовать стандартный конфиг Remnawave в мульти-протокольную конфигурацию.
 
